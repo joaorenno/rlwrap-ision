@@ -1,0 +1,80 @@
+#!/usr/bin/env perl
+# Author: Joao Renno
+# Version: 0.1b
+# Requires: ISION version 1.2.5 or later 
+# Description: Filter used to provide autocomplete and piping to ISION
+
+
+use lib ($ENV{RLWRAP_FILTERDIR} or ".");
+use RlwrapFilter;
+use strict;
+
+
+my $filter = new RlwrapFilter;
+my $name = $filter -> name;
+$filter -> help_text("Usage: rlwrap -z $name <command>\n".
+		     "add autocomplete and piping for ISION's telnet session");
+
+my $line_old = "";
+my $at_first_prompt = 1;
+my $ision_prompt = " >";
+my @ision_commands;
+
+$filter -> prompt_handler(\&prompt);
+$filter -> completion_handler(\&complete);
+$filter -> cloak_and_dagger_verbose(0); #set to 1 to spy on cloak_and_dagger dialogue
+
+$filter -> run;
+
+############################ subroutines ####################################
+
+sub prompt {
+  my ($prompt) =  @_;
+	my $sub_prompt = substr $prompt, -2;
+	if ($sub_prompt eq $ision_prompt) {
+    commands() unless @ision_commands;
+	}
+	return $prompt;
+}
+
+
+sub commands {
+	my $help_cmd = "help";
+	my($line) = @_;
+	$line_old = $line;
+	if (index($line, $help_cmd) != -1)
+	{
+		$line =~ s/^\s*help\s*//;
+	}
+	my $help = $help_cmd . " " . $line;
+	$help =~ s/\s+$//;
+	@ision_commands = ();
+  my $help_text = $filter -> cloak_and_dagger($help, $ision_prompt, 0.5);
+	if ($help eq $help_cmd) {
+		@ision_commands = grep /^[A-Za-z]/, (split /\s+/, $help_text);
+	} else {
+		my @ision_commands_aux = grep /^\s*\[/, (split /\n+/, $help_text);
+		for my $i (0 .. $#ision_commands_aux) {
+			@ision_commands_aux[$i] = @ision_commands_aux[$i] =~ /\[(\w+)/;
+		}
+		push @ision_commands, grep /^\w\w/, @ision_commands_aux;
+	}
+  $at_first_prompt = 0;
+}
+
+
+sub complete {
+  my($line, $prefix, @completions) =@_;
+  my $nwords = scalar split /\s+/, $line;
+  $nwords++ unless $prefix;
+	$line =~ s/\Q$prefix\E$//;
+	$line =~ s/^\s+//;
+	$line =~ s/\s+$//;
+	$line = lc($line);
+	$prefix = lc($prefix);
+	if ($line ne $line_old) {
+		commands($line);
+	}
+	push @completions, grep /^$prefix/, map { lc($_) } @ision_commands;
+	return @completions;
+}
