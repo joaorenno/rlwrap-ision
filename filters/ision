@@ -1,26 +1,49 @@
 #!/usr/bin/env perl
 # Author: Joao Renno
-# Version: 0.1b
+# Version: 0.2b
 # Requires: ISION version 1.2.5 or later 
 # Description: Filter used to provide autocomplete and piping to ISION
 
 
 use lib ($ENV{RLWRAP_FILTERDIR} or ".");
 use RlwrapFilter;
+use POSIX qw(:signal_h);
 use strict;
 
 
+my @signals = split /\s+/, `kill -l`; # yuck!
+for (my $signo = 1; $signals[$signo-1]; $signo++) {
+    if ($signals[$signo-1] eq 'WINCH') {       
+	my $sigset_unblock = POSIX::SigSet->new($signo);
+	unless (defined sigprocmask(SIG_UNBLOCK, $sigset_unblock)) {
+	    die "Could not unblock signals: $!\n";
+	}
+    }
+}
+
 my $filter = new RlwrapFilter;
 my $name = $filter -> name;
-$filter -> help_text("Usage: rlwrap -z $name <command>\n".
+$filter -> help_text("Usage: rlwrap -z $name -w 200 <command>\n".
 		     "add autocomplete and piping for ISION's telnet session");
+
+my $raw_input;
+my $pipeline;
+my $prompt;
+my $out_chunkno = 0;
+my $wait_text = "wait...";
 
 my $line_old = "";
 my $at_first_prompt = 1;
 my $ision_prompt = " >";
 my @ision_commands;
 
+$filter -> prompts_are_never_empty(1);
+$filter -> input_handler(\&input);
+$filter -> output_handler(\&output);
 $filter -> prompt_handler(\&prompt);
+$filter -> echo_handler(sub {$raw_input}); 
+
+#$filter -> prompt_handler(\&prompt);
 $filter -> completion_handler(\&complete);
 $filter -> cloak_and_dagger_verbose(0); #set to 1 to spy on cloak_and_dagger dialogue
 
@@ -28,11 +51,35 @@ $filter -> run;
 
 ############################ subroutines ####################################
 
+sub input {
+  my $input;
+  $raw_input = $_;
+  ($input, undef, $pipeline) =  /([^|]*)(\|(.*))?/;
+  return $input;
+}
+
+
+sub output {
+  return ($pipeline ? ($out_chunkno++ == 0 ? $wait_text : "")  : $_);
+}
+
+
 sub prompt {
   my ($prompt) =  @_;
+  $out_chunkno = 0;
 	my $sub_prompt = substr $prompt, -2;
 	if ($sub_prompt eq $ision_prompt) {
-    commands() unless @ision_commands;
+		if ($pipeline) {
+			$filter -> send_output_oob("\x08" x length($wait_text). "\n"); # erase $wait_text and go to new line
+			local $SIG{PIPE} =  'IGNORE'; # we don't want to die if the pipeline quits 
+			open PIPELINE, "| $pipeline";   
+			print PIPELINE $filter->cumulative_output;
+			close PIPELINE; # this waits until pipeline has finished
+			undef $pipeline;
+			$filter ->send_output_oob("\n"); # start prompt on new line
+		} else {
+			commands() unless @ision_commands;
+		}
 	}
 	return $prompt;
 }
