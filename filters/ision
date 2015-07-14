@@ -1,8 +1,8 @@
 #!/usr/bin/env perl
 # Author: Joao Renno
-# Version: 0.2b
+# Version: 0.3b
 # Requires: ISION version 1.2.5 or later 
-# Description: Filter used to provide autocomplete and piping to ISION
+# Description: Filter used to provide autocomplete and piping to ISION's telnet session
 
 
 use lib ($ENV{RLWRAP_FILTERDIR} or ".");
@@ -37,13 +37,14 @@ my $at_first_prompt = 1;
 my $ision_prompt = " >";
 my @ision_commands;
 
+my $mode = 0; #0: advanced autocomplete; 1: simple autocomplete
+
 $filter -> prompts_are_never_empty(1);
 $filter -> input_handler(\&input);
 $filter -> output_handler(\&output);
 $filter -> prompt_handler(\&prompt);
 $filter -> echo_handler(sub {$raw_input}); 
 
-#$filter -> prompt_handler(\&prompt);
 $filter -> completion_handler(\&complete);
 $filter -> cloak_and_dagger_verbose(0); #set to 1 to spy on cloak_and_dagger dialogue
 
@@ -88,7 +89,6 @@ sub prompt {
 sub commands {
 	my $help_cmd = "help";
 	my($line) = @_;
-	$line_old = $line;
 	if (index($line, $help_cmd) != -1)
 	{
 		$line =~ s/^\s*help\s*//;
@@ -98,20 +98,76 @@ sub commands {
 	@ision_commands = ();
   my $help_text = $filter -> cloak_and_dagger($help, $ision_prompt, 0.5);
 	if ($help eq $help_cmd) {
-		@ision_commands = grep /^[A-Za-z]/, (split /\s+/, $help_text);
+		commands_help($line, $help_text);
 	} else {
-		my @ision_commands_aux = grep /^\s*\[/, (split /\n+/, $help_text);
-		for my $i (0 .. $#ision_commands_aux) {
-			@ision_commands_aux[$i] = @ision_commands_aux[$i] =~ /\[(\w+)/;
-		}
-		push @ision_commands, grep /^\w\w/, @ision_commands_aux;
+		commands_subcommand($line, $help_text);
 	}
   $at_first_prompt = 0;
 }
 
 
+sub commands_help {
+	my ($line, $help_text) = @_;
+	@ision_commands = grep /^[A-Z]/, (split /\s+/, $help_text);
+}
+
+
+sub commands_subcommand {
+	my ($line, $help_text) = @_;
+	my @ision_commands_aux = grep /^\s*\[/, (split /\n+/, $help_text);
+	for(@ision_commands_aux) {
+		s/(.*\]):.*$/\1/;
+	}
+	if ($mode == 0) {		#advanced autocomplete
+		my ($ision_maincommand) = $line =~ /^(\w+)/;
+		my ($ision_subcommand) = $line =~ /^\w+\s+(\w+)/;
+		my ($ision_lastcommand) = $line =~ /.*\s+(\/?\w+)\s*$/;
+		my $ision_subcommand_flag = 0;
+		my @ision_subcommand_array = ();
+		my @ision_line_operator_array = ();
+		if ($ision_subcommand ne "" and $ision_subcommand ne $ision_maincommand) {
+			$ision_subcommand_flag = 1;
+		}
+		for (@ision_commands_aux) {
+			my $ision_line_subcommand = "";
+			s/^\s+//;
+			s/\s+$//;
+			if (/^\[([^<]\w+\|?\w*)\]$/) {
+				$ision_line_subcommand = $1;
+			} elsif ( /^\[([^<]\w+\|?\w*)\s+/) {
+				$ision_line_subcommand = $1;
+			} elsif (/\s+([^<]\w+\|?\w*)\s+/) {
+				$ision_line_subcommand = $1;
+			} elsif (/\s+([^<]\w+\|?\w*)\]$/) {
+				$ision_line_subcommand = $1;
+			}
+			push @ision_subcommand_array, (split /\|/, $ision_line_subcommand);
+			if ($ision_subcommand_flag) {		#push operators from line
+				if ($ision_subcommand eq $ision_line_subcommand) {		#parse the right lines
+					push @ision_line_operator_array, grep /^(?!.*<)/, split /\s*[\s\|]/;
+					for (@ision_line_operator_array) {
+						s/^\s+//;
+						s/\s+$//;
+						tr/[]//d;
+					}
+					@ision_line_operator_array = grep { $_ ne $ision_subcommand and $_ ne $ision_lastcommand } @ision_line_operator_array;
+				}
+				@ision_commands = @ision_line_operator_array;
+			} else {		#push all subcommands
+				@ision_commands = @ision_subcommand_array;
+			}
+		}
+	} else {		#simple autocomplete
+		for (@ision_commands_aux) {
+			push @ision_commands, grep /^[^<^\[].*[^\]]$/, (split /\s*[\s\|]/);
+		}
+	}
+}
+
+
 sub complete {
-  my($line, $prefix, @completions) =@_;
+  my($line, $prefix, @completions) = @_;
+	my $line_full = $line;
   my $nwords = scalar split /\s+/, $line;
   $nwords++ unless $prefix;
 	$line =~ s/\Q$prefix\E$//;
@@ -120,8 +176,13 @@ sub complete {
 	$line = lc($line);
 	$prefix = lc($prefix);
 	if ($line ne $line_old) {
+		$line_old = $line;
 		commands($line);
+		if ($line_full =~ /\s+\/\w*$/) {
+			@ision_commands = grep /^\//, @ision_commands;
+			tr/\///d for @ision_commands;
+		}
 	}
-	push @completions, grep /^$prefix/, map { lc($_) } @ision_commands;
+	push @completions, grep /^\Q$prefix\E/, map { lc($_) } @ision_commands;
 	return @completions;
 }
