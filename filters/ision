@@ -34,7 +34,7 @@ my $wait_text = "wait...";
 
 my $line_old = "";
 my $at_first_prompt = 1;
-my $ision_prompt = ">";
+my $ision_prompt = "-@#@#@#-"; # initializing with some random garbage
 my @ision_commands;
 
 my $mode = 0; # 0: advanced autocomplete; 1: simple autocomplete
@@ -68,8 +68,9 @@ sub output {
 sub prompt {
   my ($prompt) =  @_;
   $out_chunkno = 0;
-	my $sub_prompt = substr $prompt, -2;
-	if ($sub_prompt eq " ".$ision_prompt or $sub_prompt eq "]".$ision_prompt) {	# test with or without alarm notification in prompt
+	$_ = substr $prompt, -5;
+	if (/^.*39m >$/ || /\[[cde]:\]>/) {	# test with or without alarm notification in prompt
+		$ision_prompt = quotemeta($prompt);
 		if ($pipeline) {
 			$filter -> send_output_oob("\x08" x length($wait_text). "\n"); # erase $wait_text and go to new line
 			local $SIG{PIPE} =  'IGNORE'; # we don't want to die if the pipeline quits 
@@ -93,7 +94,16 @@ sub commands {
 	{
 		$line =~ s/^\s*help\s*//;
 	}
-	my $help = $help_cmd . " " . $line;
+	my $line_args = "";
+	my @line_args_aux = split /\s/,$line;
+	my $line_args_count = 4;
+	for (@line_args_aux) {
+		if ($line_args_count > 0) {
+			$line_args_count -= 1;
+			$line_args = $line_args . " " . $_;
+		}
+	}
+	my $help = $help_cmd . " " . $line_args;
 	$help =~ s/\s+$//;
 	@ision_commands = ();
   my $help_text = $filter -> cloak_and_dagger($help, $ision_prompt, 0.5);
@@ -120,18 +130,18 @@ sub commands_subcommand {
 	}
 	if ($mode == 0) {		# advanced autocomplete
 		my ($ision_maincommand) = $line =~ /^(\w+)/;
-		my ($ision_subcommand) = $line =~ /^\w+\s+(\w+)/;
+		my ($ision_subcommand) = $line =~ /^\w+\s+(.+)$/;
 		my ($ision_lastcommand) = $line =~ /.*\s+(\/?\w+)\s*$/;
-		my $ision_subcommand_flag = 0;
 		my @ision_subcommand_array = ();
 		my @ision_line_operator_array = ();
-		if ($ision_subcommand ne "" and $ision_subcommand ne $ision_maincommand) {
-			$ision_subcommand_flag = 1;
-		}
+		my $ision_subcommand_flag = 0;
 		for (@ision_commands_aux) {
 			my $ision_line_subcommand = "";
 			s/^\s+//;
 			s/\s+$//;
+			if (/^.*39m$/) {	# remove 'ALARM' message from results
+				next;
+			}
 			if (/^\[([^<]\w+\|?\w*)\]$/) {
 				$ision_line_subcommand = $1;
 			} elsif ( /^\[([^<]\w+\|?\w*)\s+/) {
@@ -142,20 +152,20 @@ sub commands_subcommand {
 				$ision_line_subcommand = $1;
 			}
 			push @ision_subcommand_array, (split /\|/, $ision_line_subcommand);
-			if ($ision_subcommand_flag) {		# push operators from line
-				if ($ision_subcommand eq $ision_line_subcommand) {		# parse the right lines
-					push @ision_line_operator_array, grep /^(?!.*<)/, split /\s*[\s\|]/;
-					for (@ision_line_operator_array) {
-						s/^\s+//;
-						s/\s+$//;
-						tr/[]//d;
-					}
-					@ision_line_operator_array = grep { $_ ne $ision_subcommand and $_ ne $ision_lastcommand } @ision_line_operator_array;
+			if ($ision_subcommand ne "" and index($ision_subcommand, $ision_line_subcommand) != -1) {		# parse the right lines
+				$ision_subcommand_flag = 1;
+				push @ision_line_operator_array, grep /^(?!.*<)/, split /\s*[\s\|]/;
+				for (@ision_line_operator_array) {
+					s/^\s+//;
+					s/\s+$//;
+					tr/[]//d;
 				}
-				@ision_commands = @ision_line_operator_array;
-			} else {		# push all subcommands
-				@ision_commands = @ision_subcommand_array;
+				@ision_line_operator_array = grep {index($ision_subcommand, $_) == -1} @ision_line_operator_array;
 			}
+			@ision_commands = @ision_line_operator_array;
+		}
+		if (not $ision_subcommand_flag) {	# push all subcommands
+			@ision_commands = @ision_subcommand_array;
 		}
 	} else {		# simple autocomplete
 		for (@ision_commands_aux) {
